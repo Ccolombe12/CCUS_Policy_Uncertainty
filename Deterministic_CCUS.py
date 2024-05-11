@@ -387,7 +387,7 @@ def run_exp(case_num, storage_incentive, utilization_incentive, base_storage=85,
     model.OBJ = pyo.Objective(expr=obj_expression, sense=pyo.maximize)
 
     print('running optimization model!')
-    opt = pyo.SolverFactory('cplex', executable='/Users/connor/Applications/CPLEX_Studio1210/cplex/bin/x86-64_osx/cplex')
+    opt = pyo.SolverFactory('cplex', executable='/Users/connor/Applications/CPLEX_Studio1210/cplex/bin/x86-64_osx/cplex') # You will have to change this to the location of your solver .exe file.
     opt.options['mip_tolerances_mipgap'] = 0.001
     results = opt.solve(model)
 
