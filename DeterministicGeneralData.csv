@@ -1,0 +1,4 @@
+﻿Num Diameters,number of pipelines,total number of nodes ,# of Source,# of Sinks,total number of time periods ,"stage one tax, storage","stage one tax, util"
+3,66,43,13,7,3,85,60
+discount rate ,number of years in each period,,,,,,
+0.06,10,,,,,,
