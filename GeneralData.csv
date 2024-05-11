@@ -1,9 +1,4 @@
 ﻿Num Diameters,number of pipelines,total number of nodes ,# of Source,# of Sinks,total number of time periods ,Num periods in first stage,"stage one tax, storage","stage one tax, util",num scenarios
-3,66,43,13,7,3,3,85,60,1
+3,66,43,13,7,3,1,50,35,5
 discount rate ,number of years in each period,,,,,,,,
 0.06,10,,,,,,,,
-Tax Realizations,,,,,,,,,
-85,,,,,,,,,
-60,,,,,,,,,
-Scenario Probabilities,,,,,,,,,
-1,,,,,,,,,
