@@ -6,8 +6,9 @@ from numpy import format_float_scientific
 import time
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+from helper_functions import plot_total_CO2, plot_total_investment_Det, plot_first_stage_investment_Det
 
-from helper_functions import update_slack
 
 # This model assumes you have the following files in your working directory:
 # ++++++++++++++++++++
@@ -32,9 +33,10 @@ def get_from_neighbors(node, edge_dict):
 # =====================================================================================================================
 # ================================  Load in General Model Data  =======================================================
 # =====================================================================================================================
-def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util=60, second_stage_start=inf, existing_sources={}, existing_sinks={}, existing_pipelines={}):
+def run_exp(case_num, storage_incentive, utilization_incentive, base_storage=85, base_util=60, second_stage_start=2,
+            existing_sources={}, existing_sinks={}, existing_pipelines={}):
     start_time = time.time()
-    file = open("Cases/Case6/DeterministicGeneralData.csv", encoding='latin-1')
+    file = open(f"Cases/Case{case_num}/DeterministicGeneralData.csv", encoding='latin-1')
     print('Reading in data')
     csv_reader = csv.reader(file)
     next(csv_reader)  # skip the header
@@ -79,15 +81,16 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
 
     model.storage_incentive_1 = {t: base_storage if t < second_stage_start else storage_incentive for t in
                                  range(1, num_time_periods + 1)}
+    print(f' The geological storage incentives are {model.storage_incentive_1}')
     model.util_incentive_1 = {t: base_util if t < second_stage_start else utilization_incentive for t in
                               range(1, num_time_periods + 1)}
-
+    print(f' The utilization storage incentives are {model.util_incentive_1}')
     # =====================================================================================================================
     # ======================= Read in data from files =====================================================================
     # =====================================================================================================================
 
     # +++++++++++++++++++++ Read in Source data ++++++++++++++++++++++++++++++++++++++
-    file = open("Cases/Case6/Sources_6.csv", encoding='latin-1')
+    file = open(f"Cases/Case{case_num}/Sources.csv", encoding='latin-1')
     csv_reader = csv.reader(file)
     source_set = set()
     next(csv_reader)  # Skip Header
@@ -108,7 +111,7 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     file.close()
 
     # +++++++++++++++++++++ Read in Sink data ++++++++++++++++++++++++++++++++++++++
-    file = open("Cases/Case6/Sinks_6.csv", encoding='latin-1')
+    file = open(f"Cases/Case{case_num}/Sinks_6.csv", encoding='latin-1')
     csv_reader = csv.reader(file)
     sink_set = set()
     util_set = set()
@@ -141,7 +144,7 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
 
     # +++++++++++++++++++++ Read in Pipeline data ++++++++++++++++++++++++++++++++++++++
 
-    file = open("Cases/Case6/Arcs_6.csv", encoding='latin-1')
+    file = open(f"Cases/Case{case_num}/Arcs.csv", encoding='latin-1')
     csv_reader = csv.reader(file)
     next(csv_reader)  # skip the initial header
 
@@ -203,7 +206,8 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     model.N = source_set.union(sink_set).union(transition_node_set)  # Set of all nodes.
     model.D = pyo.RangeSet(num_D)  # Set of pipeline diameters indices
     model.T = pyo.RangeSet(num_time_periods)  # Set of model time periods
-    model.T_1 = [1]
+    model.T_1 = [1]  # first stage is always the first period here todo: Generalize this code
+
     # Now we preprocess to generate sets of nodes that point to .
     model.to_neighbor_dict = dict()
     model.from_neighbor_dict = dict()
@@ -216,26 +220,19 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     # ====================================================================================================================
 
     # +++++++++++++++ First stage variables. They will all have the "var_1" subscript +++++++++++++++++++++++++++
-    model.x_1 = pyo.Var(model.N, model.N, model.T, domain=pyo.Reals)  # Amount of flow from i -> j in period t
-    model.y_1 = pyo.Var(model.N, model.N, model.D, model.T,
-                        domain=pyo.Binary)  # Indicates if pipeline (i,j) with diameter d exists at time t
-    model.abs_flow_1 = pyo.Var(model.N, model.N, model.T, domain=pyo.PositiveReals)
+    model.x_1 = pyo.Var(model.E, model.T, domain=pyo.Reals)  # Amount of flow from i -> j in period t. May be positive or negative depending on the direction of the flow
+    model.y_1 = pyo.Var(model.E, model.D, model.T, domain=pyo.Binary)  # Indicates if pipeline (i,j) with diameter d exists at time t
+    model.abs_flow_1 = pyo.Var(model.E, model.T, domain=pyo.PositiveReals)  # The absolute value of the flow from i -> j during period t
 
-    model.a_1 = pyo.Var(model.S, model.T,
-                        domain=pyo.PositiveReals)  # Amount of CO2 captured at source i during period t
-    model.b_1 = pyo.Var(model.R, model.T,
-                        domain=pyo.PositiveReals)  # Amount of CO2 injected into reservoir j (tCO2/yr)
+    model.a_1 = pyo.Var(model.S, model.T, domain=pyo.PositiveReals)  # Amount of CO2 captured at source i during period t
+    model.b_1 = pyo.Var(model.R, model.T, domain=pyo.PositiveReals)  # Amount of CO2 injected into reservoir j
 
-    model.s_1 = pyo.Var(model.S, model.T, domain=pyo.Binary)  # Indicates if source at node i is open during period t
-    model.r_1 = pyo.Var(model.R, model.T,
-                        domain=pyo.Binary)  # Indicates if reservoir at node j is open during period t
+    model.s_1 = pyo.Var(model.S, model.T, domain=pyo.Binary)  # Indicates if source at node i exists during period t
+    model.r_1 = pyo.Var(model.R, model.T, domain=pyo.Binary)  # Indicates if reservoir at node j exists in period t
 
-    model.sigma_1 = pyo.Var(model.S, model.T,
-                            domain=pyo.Binary)  # The indicator variable for if source i is constructed in period t
-    model.rho_1 = pyo.Var(model.R, model.T,
-                          domain=pyo.Binary)  # The indicator variable for if reservoir j is constructed in period t
-    model.gamma_1 = pyo.Var(model.N, model.N, model.D, model.T,
-                            domain=pyo.Binary)  # The indicator variable for if pipeline
+    model.sigma_1 = pyo.Var(model.S, model.T, domain=pyo.Binary)  # The indicator variable for if source i is constructed in period t
+    model.rho_1 = pyo.Var(model.R, model.T, domain=pyo.Binary)  # The indicator variable for if reservoir j is constructed in period t
+    model.gamma_1 = pyo.Var(model.E, model.D, model.T, domain=pyo.Binary)  # The indicator variable for if pipeline
 
     # ====================================================================================================================
     # ====================================== Model Constraints  =========================================================
@@ -244,6 +241,7 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     # +++++++++++++++++ First - Stage Constraints +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # Read in and add existing
     # (Cons 1) Constraint that flow in a built pipeline must fall within min and max allowable flows for the given diameter
+
     model.max_min_flows = pyo.ConstraintList()
 
     for i, j in model.E:
@@ -251,12 +249,12 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
 
             max_flow = sum(model.Q_pipe_max[d] * model.y_1[i, j, d, t] for d in model.D)
 
-            flow = model.x_1[i, j, t]
-            model.max_min_flows.add(-max_flow <= flow)
+            flow = model.x_1[i, j, t]  # The flow in egde (i, j) in period t
+            model.max_min_flows.add(-max_flow <= flow)  # magnitude of flow is bounded by max_flow
             model.max_min_flows.add(flow <= max_flow)
 
-            model.max_min_flows.add(model.abs_flow_1[i, j, t] >= flow)
-            model.max_min_flows.add(model.abs_flow_1[i, j, t] >= - flow)
+            model.max_min_flows.add(model.abs_flow_1[i, j, t] >= flow)  # z > x
+            model.max_min_flows.add(model.abs_flow_1[i, j, t] >= - flow) # z > -x
 
     # (Cons 1a) If pipeline (i,j,d) exists/is built at time t. Then it exists for time t+1,t+2,..., T_1
     model.pipe_continuity = pyo.ConstraintList()
@@ -264,38 +262,35 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
         for d in model.D:
             for t in model.T:
                 if t == 1:  # Check if this piece of infrastructure initially exists
-                    y_ijd0 = (i, j, d) in model.existing_pipelines
-                    model.pipe_continuity.add(
-                        y_ijd0 <= model.y_1[i, j, d, t])  # Mark as existing in period 1,if already exists.
+                    y_ijd0 = 1 if (i, j, d) in model.existing_pipelines else 0
+                    model.pipe_continuity.add(y_ijd0 <= model.y_1[i, j, d, t])  # Mark as existing in period 1,if already exists.
                 else:
                     exists_in_prev_period = model.y_1[i, j, d, t - 1]
                     exists_in_curr_period = model.y_1[i, j, d, t]
-
                     model.pipe_continuity.add(exists_in_prev_period <= exists_in_curr_period)
 
     # Cons (2) The net-CO_2 flow in a given time period for a given node must be balanced.
 
     model.flow_conservation = pyo.ConstraintList()
-
     for i in model.N:
         for t in model.T:
-
-            if not model.to_neighbor_dict[i] and not model.from_neighbor_dict[i]:  # If node has no edges, then we have a redundant constraint
+            children = model.to_neighbor_dict[i]
+            parents = model.from_neighbor_dict[i]
+            if not children and not parents :  # If node has no edges, then we have a redundant constraint
                 tmp_lhs = 0
             else:
                 # Let flow < 0 => out of node, flow > 0 => into node
-                tmp_lhs = - sum(model.x_1[i, j, t] for j in model.to_neighbor_dict[i]) + sum(
-                    model.x_1[j, i, t] for j in model.from_neighbor_dict[i])
+                tmp_lhs = - sum(model.x_1[i, j, t] for j in children) + sum(model.x_1[j, i, t] for j in parents)
             if i in model.R:
-                rhs = model.b_1[i, t]
+                rhs = model.b_1[i, t] # If sink, net flow is positive
             elif i in model.S:
-                rhs = - model.a_1[i, t]
+                rhs = - model.a_1[i, t] # If source, net flow is negative
             else:
-                rhs = 0
+                rhs = 0  # transition nodes have zero net-flow
 
             model.flow_conservation.add(tmp_lhs == rhs)
 
-    # Cons (3): We can only capture CO_2 from source if it is active and then it is capped by the max output in a time unit.
+    # Cons (3): We can only capture CO_2 from source if it is active, and then it is capped by the max output in a time unit.
 
     model.source_output = pyo.ConstraintList()
 
@@ -313,10 +308,10 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     model.sink_input = pyo.ConstraintList()
     for j in model.R:
         for t in model.T:
-            model.sink_input.add(model.b_1[j, t] <= model.Q_res_rate[j] * model.r_1[j, t])
+            model.sink_input.add(model.b_1[j, t] <= model.Q_res_rate[j] * model.r_1[j, t])  # Can't capture more than the max_rate and we have to build it first
             # Cons (4a): Once we build a sink/retrofit on, it stays active.
             if t == 1:  # Check if this reservoir is already built and if so mark it as existing in period 1.
-                r_j0 = j in model.existing_res
+                r_j0 = 1 if j in model.existing_res else 0
                 model.sink_input.add(r_j0 <= model.r_1[j, t])
             else:
                 model.sink_input.add(model.r_1[j, t - 1] <= model.r_1[j, t])
@@ -330,11 +325,10 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     for t in model.T:
         for i in model.S:
             if t == 1:
-                s_i0 = (i in model.existing_sources)
+                s_i0 = 1 if i in model.existing_sources else 0
                 rhs = model.s_1[i, t] - s_i0
             else:
                 rhs = model.s_1[i, t] - model.s_1[i, t - 1]
-
             model.source_build_times.add(model.sigma_1[i, t] == rhs)
 
     # Cons(1.5): Picking out the sink build times.
@@ -342,11 +336,10 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     for t in model.T:
         for j in model.R:
             if t == 1:
-                r_i0 = (j in model.existing_res)
+                r_i0 = 1 if j in model.existing_res else 0
                 rhs = model.r_1[j, t] - r_i0
             else:
                 rhs = model.r_1[j, t] - model.r_1[j, t - 1]
-
             model.res_build_times.add(model.rho_1[j, t] == rhs)
 
     # (Fc) Constraint that determines the period in which the pipelines are built
@@ -355,7 +348,7 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
         for i, j in model.E:
             for d in model.D:
                 if t == 1:
-                    y_ijd0 = (i, j, d) in model.existing_pipelines
+                    y_ijd0 = 1 if (i, j, d) in model.existing_pipelines else 0
                     rhs = model.y_1[i, j, d, t] - y_ijd0
                 else:
                     rhs = model.y_1[i, j, d, t] - model.y_1[i, j, d, t - 1]
@@ -370,145 +363,83 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
     # +++++++++++++++++++++++++++++ First Stage Costs +++++++++++++++++++++++++++++++++++++++++++++++++++
     # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-    capture_costs_1 = sum((model.B_src[i, t] * model.sigma_1[i, t] + model.OM_src[i, t] * model.s_1[i, t] + model.V_src[
-        i, t] * model.a_1[i, t]) * ((1 + discount_rate) ** (- period_length * t)) for t in model.T for i in model.S)
+    capture_costs_1 = sum(model.B_src[i, t] * model.sigma_1[i, t] + model.OM_src[i, t] * model.s_1[i, t] + model.V_src[i, t] * model.a_1[i, t] for t in model.T for i in model.S)
     # ----------  Pipeline costs ------------------------------
-    pipeline_use_costs_1 = sum(
-        model.V_pipe[i, j, t] * model.abs_flow_1[i, j, t] * ((1 + discount_rate) ** (- period_length * t)) for i, j in
-        model.E for t in model.T)
-
-    pipeline_build_costs_1 = sum(
-        (model.B_pipe[i, j, d, t] * model.gamma_1[i, j, d, t] + model.OM_pipe[i, j, d, t] * model.y_1[i, j, d, t]) * ((
-                1 + discount_rate) ** (- period_length * t)) for i, j in model.E for d in model.D for t in model.T)
-
+    pipeline_use_costs_1 = sum(model.V_pipe[i, j, t] * model.abs_flow_1[i, j, t] for i, j in model.E for t in model.T)
+    pipeline_build_costs_1 = sum(model.B_pipe[i, j, d, t] * model.gamma_1[i, j, d, t] + model.OM_pipe[i, j, d, t] * model.y_1[i, j, d, t] for i, j in model.E for d in model.D for t in model.T)
     # -------- Storage Costs ----------------------------------
-
-    storage_costs_1 = sum((model.rho_1[j, t] * model.B_res[j, t] + model.OM_res[j, t] * model.r_1[j, t] + model.V_res[
-        j, t] * model.b_1[j, t]) * ((1 + discount_rate) ** (- period_length * t)) for t in model.T for j in model.R)
-
+    storage_costs_1 = sum((model.rho_1[j, t] * model.B_res[j, t] + model.OM_res[j, t] * model.r_1[j, t] + model.V_res[j, t] * model.b_1[j, t]) for t in model.T for j in model.R)
     # ------ Utilization Revenue ------------------------------
-
-    util_rev_1 = sum(
-        model.V_util[j] * model.b_1[j, t] * (1 + discount_rate) ** (- period_length * t) for j in model.U for t in
-        model.T)
-
+    util_rev_1 = sum(model.V_util[j] * model.b_1[j, t] for j in model.U for t in model.T)  # Revenue from EOR
     # ------ q45 Tax Revenue -----------------------------------
+    geo_sinks = model.R.difference(model.U)
+    storage_tax_rev_1 = sum(model.storage_incentive_1[t] * model.b_1[j, t] for j in geo_sinks for t in model.T)
+    util_tax_rev_1 = sum(model.util_incentive_1[t] * model.b_1[j, t] for j in model.U for t in model.T)
 
-    storage_tax_rev_1 = sum(model.storage_incentive_1[t] *
-        model.b_1[j, t] * ((1 + discount_rate) ** (- period_length * t)) for j in model.R.difference(model.U) for t in
-        model.T)
-    util_tax_rev_1 = sum(model.util_incentive_1[t] *
-        model.b_1[j, t] * ((1 + discount_rate) ** (- period_length * t)) for j in model.U for t in model.T)
-
-    tax_rev_1 = util_tax_rev_1 + storage_tax_rev_1
+    tax_rev_1 = util_tax_rev_1 + storage_tax_rev_1  # total revenue from incentitve
     # ---------- Final objective function Expression -----------
 
-    first_stage_costs = (capture_costs_1 + pipeline_use_costs_1 + pipeline_build_costs_1 + storage_costs_1) - util_rev_1 - tax_rev_1
+    first_stage_profit = util_rev_1 + tax_rev_1 - (capture_costs_1 + pipeline_use_costs_1 + pipeline_build_costs_1 + storage_costs_1)
 
     # ---------- Final objective function Expression -----------
-    obj_expression = first_stage_costs
+    obj_expression = first_stage_profit
 
-    model.OBJ = pyo.Objective(expr=obj_expression)
+    model.OBJ = pyo.Objective(expr=obj_expression, sense=pyo.maximize)
 
     print('running optimization model!')
-    opt = pyo.SolverFactory('cplex',
-                            executable='/Users/connor/Applications/CPLEX_Studio1210/cplex/bin/x86-64_osx/cplex')
-    opt.options['mip_tolerances_mipgap'] = 0.01
+    opt = pyo.SolverFactory('cplex', executable='/Users/connor/Applications/CPLEX_Studio1210/cplex/bin/x86-64_osx/cplex')
+    opt.options['mip_tolerances_mipgap'] = 0.001
     results = opt.solve(model)
 
     # =================================================================================================================
     # ============================= Write our Solutions to File =======================================================
     # =================================================================================================================
 
-
     print(results)
     print(f'Objective value = {pyo.value(model.OBJ)}')
-    print(
-        f'Total CO_2 captured: {int(sum(pyo.value(model.b_1[j, t]) for j in model.R for t in model.T)) / 10 ** 6} MT CO_2.')
+    print(f'Total CO_2 captured: {sum(pyo.value(model.b_1[j, t]) for j in model.R for t in model.T) / 10 ** 6:.2f} MT CO_2.')
 
     print(f'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n'
           f'++++++++++++++++++++++++++++++++ Objective Function Price Breakdown ++++++++++++++++++++++++++++\n'
           f'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++')
     print(f'The tax credit values for the "Second Stage" were {storage_incentive, utilization_incentive}.')
-    capture_costs = int(sum((model.B_src[i, t] * pyo.value(model.sigma_1[i, t]) +
-                            model.OM_src[i, t] * pyo.value(model.s_1[i, t]) + model.V_src[i, t] * pyo.value(model.a_1[i, t])) * ((1 + discount_rate) ** (- period_length * t)) for t in model.T for i in model.S))
+    capture_costs = sum((model.B_src[i, t] * pyo.value(model.sigma_1[i, t]) + model.OM_src[i, t] * pyo.value(model.s_1[i, t]) + model.V_src[i, t] * pyo.value(model.a_1[i, t])) for t in model.T for i in model.S)
 
+    print(f'Total Capture costs: {capture_costs:_.0f}')
 
-
-    print(f'Total Capture costs: {capture_costs}')
-
-    pipeline_use_costs = int(
-        sum(model.V_pipe[i, j, t] * pyo.value(model.abs_flow_1[i, j, t] * ((1 + discount_rate) ** (- period_length * t))) for i, j in model.E for t in model.T))
-
-    pipeline_build_costs = int(sum((model.B_pipe[i, j, d, t] * pyo.value(model.gamma_1[i, j, d, t]) +
-                                   model.OM_pipe[i, j, d, t] * pyo.value(model.y_1[i, j, d, t]))*((1 + discount_rate) ** (- period_length * t)) for i, j in model.E for
-                                   d in model.D for t in model.T))
-
+    pipeline_use_costs = sum(model.V_pipe[i, j, t] * pyo.value(model.abs_flow_1[i, j, t]) for i, j in model.E for t in model.T)
+    pipeline_build_costs = sum(model.B_pipe[i, j, d, t] * pyo.value(model.gamma_1[i, j, d, t]) + model.OM_pipe[i, j, d, t] * pyo.value(model.y_1[i, j, d, t]) for i, j in model.E for d in model.D for t in model.T)
     transportation_costs = pipeline_build_costs + pipeline_use_costs
-    print(f'Total pipeline costs: {transportation_costs}')
 
-    storage_costs = int(sum((model.B_res[j, t] * pyo.value(model.rho_1[j, t]) +
-                            model.OM_res[j, t] * pyo.value(model.r_1[j, t]) +
-                            model.V_res[j, t] * pyo.value(model.b_1[j, t])) * ((1 + discount_rate) ** (- period_length * t)) for t in model.T for j in
-                            model.R))
-    print(f'Total Storage costs: {storage_costs}')
-    # ADD FIRST STAGE COSTS
+    print(f'Total pipeline costs: {transportation_costs:_.0f}')
 
-    capture_costs_period_1 = int(sum((model.B_src[i, t] * pyo.value(model.sigma_1[i, t]) +
-                             model.OM_src[i, t] * pyo.value(model.s_1[i, t]) + model.V_src[i, t] * pyo.value(
-                model.a_1[i, t])) * ((1 + discount_rate) ** (- period_length * t)) for t in model.T_1 for i in model.S))
+    storage_costs = sum(model.B_res[j, t] * pyo.value(model.rho_1[j, t]) + model.OM_res[j, t] * pyo.value(model.r_1[j, t]) + model.V_res[j, t] * pyo.value(model.b_1[j, t]) for t in model.T for j in model.R)
+    print(f'Total Storage costs: {storage_costs:_.0f}')
 
-    print(f'Total Capture costs: {capture_costs}')
+    capture_costs_period_1 = sum(model.B_src[i, t] * pyo.value(model.sigma_1[i, t]) + model.OM_src[i, t] * pyo.value(model.s_1[i, t]) + model.V_src[i, t] * pyo.value(model.a_1[i, t]) for t in model.T_1 for i in model.S)
+    print(f'Total Capture costs in 1st stage: {capture_costs_period_1:_.0f}')
 
-    pipeline_use_costs_period_1 = int(
-        sum(model.V_pipe[i, j, t] * pyo.value(
-            model.abs_flow_1[i, j, t] * ((1 + discount_rate) ** (- period_length * t))) for i, j in model.E for t in
-            model.T_1))
-
-    pipeline_build_costs_period_1 = int(sum((model.B_pipe[i, j, d, t] * pyo.value(model.gamma_1[i, j, d, t]) +
-                                    model.OM_pipe[i, j, d, t] * pyo.value(model.y_1[i, j, d, t])) * (
-                                               (1 + discount_rate) ** (- period_length * t)) for i, j in model.E for
-                                   d in model.D for t in model.T_1))
-
+    pipeline_use_costs_period_1 = sum(model.V_pipe[i, j, t] * pyo.value(model.abs_flow_1[i, j, t]) for i, j in model.E for t in model.T_1)
+    pipeline_build_costs_period_1 = sum(model.B_pipe[i, j, d, t] * pyo.value(model.gamma_1[i, j, d, t]) + model.OM_pipe[i, j, d, t] * pyo.value(model.y_1[i, j, d, t]) for i, j in model.E for d in model.D for t in model.T_1)
     transportation_costs_period_1 = pipeline_build_costs_period_1 + pipeline_use_costs_period_1
+    print(f'Total Transportation Costs in 1st stage: {capture_costs_period_1:_.0f}')
 
-
-    storage_costs_period_1 = int(sum((model.B_res[j, t] * pyo.value(model.rho_1[j, t]) +
-                             model.OM_res[j, t] * pyo.value(model.r_1[j, t]) +
-                             model.V_res[j, t] * pyo.value(model.b_1[j, t])) * (
-                                        (1 + discount_rate) ** (- period_length * t)) for t in model.T_1 for j in
-                            model.R))
+    storage_costs_period_1 = sum(model.B_res[j, t] * pyo.value(model.rho_1[j, t]) + model.OM_res[j, t] * pyo.value(model.r_1[j, t]) + model.V_res[j, t] * pyo.value(model.b_1[j, t]) for t in model.T_1 for j in model.R)
+    print(f'Total Storage Costs in 1st stage: {capture_costs_period_1:_.0f}')
     total_cost_1 = capture_costs_period_1 + storage_costs_period_1 + transportation_costs_period_1
-    print(f'First stage infastructure costs {total_cost_1}')
+    print(f'Total First stage costs {total_cost_1:_.0f}')
 
-    util_rev = int(sum(model.V_util[j] * pyo.value(model.b_1[j, t]) * ((1 + discount_rate) ** (- period_length * t)) for j in model.U for t in model.T))
-    storage_tax_rev = sum(pyo.value(model.storage_incentive_1[t]) *
-                            pyo.value(model.b_1[j, t]) * ((1 + discount_rate) ** (- period_length * t)) for j in
-                            model.R.difference(model.U) for t in model.T)
 
-    util_tax_rev = sum(pyo.value(model.util_incentive_1[t]) *
-                         pyo.value(model.b_1[j, t]) * ((1 + discount_rate) ** (- period_length * t)) for j in model.U for t in
-                         model.T)
+    util_rev = sum(model.V_util[j] * pyo.value(model.b_1[j, t]) for j in model.U for t in model.T)
+    storage_tax_rev = sum(pyo.value(model.storage_incentive_1[t]) * pyo.value(model.b_1[j, t]) for j in geo_sinks for t in model.T)
+    util_tax_rev = sum(pyo.value(model.util_incentive_1[t]) * pyo.value(model.b_1[j, t]) for j in model.U for t in model.T)
     tax_rev = storage_tax_rev + util_tax_rev
-    total_cost = capture_costs + storage_costs + transportation_costs
-    profit = - (capture_costs + storage_costs + pipeline_use_costs + pipeline_build_costs - util_rev - tax_rev)
-    print(
-        f'Total Profit : {format_float_scientific(profit, precision=5)}\n')
-    print(f'Revenue gained from utilization: {util_rev}')
-    print(f'Revenue gained through Tax Incentive: {tax_rev}\n')
+    profit = util_rev + tax_rev - (capture_costs + storage_costs + transportation_costs)
+    print(f'Total Profit : {profit:_.0f}')
+    print(f'Revenue gained from utilization: {util_rev:_.0f}')
+    print(f'Revenue gained through Tax Incentive: {tax_rev:_.0f}v\n')
     # ADD TOTAL FIRST STAGE INVESTMENT
 
-    if total_cost != 0:
-        labels = 'Capture ', 'Storage', 'Transportation'
-
-        sizes = [capture_costs / total_cost, storage_costs / total_cost, transportation_costs / total_cost]
-        print(capture_costs, storage_costs, transportation_costs)
-
-        fig1, ax1 = plt.subplots()
-        ax1.pie(sizes, labels=labels, autopct='%1.1f%%', shadow=True, startangle=90)
-        ax1.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
-
-        plt.show()
 
     print(f'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n'
           f'+++++++++++++++++++++++++ Pipeline Construction Breakdown ++++++++++++++++++++++++++++++++++++++\n'
@@ -527,76 +458,122 @@ def run_exp(storage_incentive, utilization_incentive, base_storage=85, base_util
         print(f'-------------------------  In time period: t = {t} ----------------------------- ')
         for i, j in model.E:
             if int(pyo.value(model.x_1[i, j, t])) > 0:
-                print(f'We send {int(pyo.value(model.x_1[i, j, t]) / 10 ** 6)} units {i} --> {j}.')
+                print(f'We send {int(pyo.value(model.x_1[i, j, t]) / 10 ** 6)} MT CO2 {i} --> {j}.')
             elif int(pyo.value(model.x_1[i, j, t])) < 0:
-                print(f'We send {- int(pyo.value(model.x_1[i, j, t]) / 10 ** 6)} units {j} --> {i}.')
+                print(f'We send {- int(pyo.value(model.x_1[i, j, t]) / 10 ** 6)} MT CO2  {j} --> {i}.')
 
     print()
     print(f'------------------ Source Capture Rates ----------------------------\n')
     for t in model.T:
         for i in model.S:
             if pyo.value(model.a_1[i, t]) > 0:
-                print(f'Source {i} produces {int(pyo.value(model.a_1[i, t]) / 10 ** 6)} units in period {t}')
+                print(f'Source {i} produces {pyo.value(model.a_1[i, t]) / 10 ** 6:_.0f} units in period {t}')
 
     print()
     print(f'------------------ Geological Storage Capture Rates ------------------------------\n')
     for t in model.T:
         for j in model.R:
             if j not in model.U and pyo.value(model.b_1[j, t]) != 0:
-                print(f'Sink {j} captures {int(pyo.value(model.b_1[j, t]) / 10 ** 6)} units in period {t}')
+                print(f'Sink {j} captures {pyo.value(model.b_1[j, t]) / 10 ** 6:_.0f} units in period {t}')
     print()
     print(f'------------------Utilization Capture Rates ------------------------------\n')
     for t in model.T:
         for j in model.U:
             if pyo.value(model.b_1[j, t]) != 0:
-                print(
-                    f'Utilization site {j} captures {int(pyo.value(model.b_1[j, t]) / 10 ** 6)} MT of CO2 in period {t}')
+                print(f'Utilization site {j} captures {pyo.value(model.b_1[j, t]) / 10 ** 6:_.0f} MT of CO2 in period {t}')
     print()
     print(f'------------------Total Capture Information ------------------------------\n')
     for j in model.R:
         total_captured_j = sum(pyo.value(model.b_1[j, t]) for t in model.T)
         if total_captured_j > 1:
-            print(
-                f'Sink {j} captures {total_captured_j / 10 ** 6} MT CO_2. Which is {100 * (total_captured_j / model.Q_res[j]):.3f}% of its storage capacity')
+            print(f'Sink {j} captures {total_captured_j / 10 ** 6} MT CO_2. Which is {100 * (total_captured_j / model.Q_res[j]):.2f} % of its storage capacity')
 
     print(f'--------------- Carbon Goals--------------------------\n')
     total_captured = int(sum(pyo.value(model.b_1[j, t]) for j in model.R for t in model.T))
-    print(
-        f'The infrastructure captured {int(total_captured / 10 ** 6)} Megatons of CO_2 over the {num_time_periods} first-stage periods.')
+    total_stage_one_captured = int(sum(pyo.value(model.b_1[j, 1]) for j in model.R))
+    print(f'The infrastructure captured {total_captured / 10 ** 6:_.0f} Megatons of CO_2 over the {num_time_periods}  periods.')
+
+
+    # New addition, let's get total INVESTMENT COSTS.
+    print(f'------------------Total INVESTMENT Information ------------------------------\n')
+    total_capture_investment = sum(pyo.value(model.sigma_1[i, t]) * model.B_src[i, t] for i in model.S for t in model.T)
+    total_storage_investment = sum(pyo.value(model.rho_1[j, t]) * model.B_res[j, t] for j in model.R for t in model.T)
+    total_pipeline_investment = sum(pyo.value(model.gamma_1[i,j,d, t]) * model.B_pipe[i,j,d, t] for i,j in model.E for t in model.T for d in model.D)
+
+    # Now for just stage 1.
+    capture_investment_1 = sum(pyo.value(model.sigma_1[i, 1]) * model.B_src[i, 1] for i in model.S)
+    storage_investment_1 = sum(pyo.value(model.rho_1[j, 1]) * model.B_res[j, 1] for j in model.R)
+    pipeline_investment_1 = sum(pyo.value(model.gamma_1[i, j, d, 1]) * model.B_pipe[i, j, d, 1] for i, j in model.E for d in model.D)
+
+
+
+
 
     print(f'--- The total runtime was  {time.time() - start_time:.2f} seconds ---" ')
+    return profit, total_captured, capture_costs, transportation_costs, storage_costs, util_rev, tax_rev, total_capture_investment, total_storage_investment, total_pipeline_investment, capture_investment_1, storage_investment_1, pipeline_investment_1, total_stage_one_captured
 
-    return profit, total_captured, capture_costs, transportation_costs, storage_costs, util_rev, tax_rev
 
+def realization_name_from_incentive(inc_val):
+    if inc_val == 0:
+        return 'low'
+    elif inc_val == 30:
+        return 'low_med'
+    elif inc_val == 60:
+        return 'med'
+    elif inc_val == 90:
+        return 'high_mid'
+    elif inc_val == 120:
+        return 'high'
+
+def realization_name_from_incentive_lo(inc_val):
+    if inc_val == 0:
+        return 'low'
+    elif inc_val == 15:
+        return 'low_med'
+    elif inc_val == 30:
+        return 'med'
+    elif inc_val == 45:
+        return 'high_mid'
+    elif inc_val == 60:
+        return 'high'
 
 if __name__ == '__main__':
     import sys
 
-    storage_incentives = [85]
-    util_incentives = [60]
+    case_num = 8
+    storage_incentives = [0, 42.5, 85, 127.5, 170]
+    util_incentives = [0, 30, 60, 90, 120]
+    # storage_incentives = [i / 2 * 50 for i in range(5)] # For old Incentive levels
+    # util_incentives = [i / 2 * 30 for i in range(5)]
     incentives = zip(storage_incentives, util_incentives)
-    text_results = 'Cases/Case6/Results/Debugging/Deterministic_max_profit_for_scaling.txt'
+
     df = pd.DataFrame()
-    sys.stdout = open(text_results, 'a')
+
     num_cases = len(storage_incentives)
 
     for i, (storage_incentive, util_incentive) in enumerate(incentives):
-        results = run_exp(storage_incentive, util_incentive, base_storage=85, base_util=60)
+        realization = realization_name_from_incentive_lo(util_incentive)
+        text_results = f'Cases/Case{case_num}/Results/{realization}'
+        sys.stdout = open(text_results, 'a')
+        results = run_exp(case_num, storage_incentive, util_incentive, base_storage=50, base_util=35)
 
-        data = {'Incentive Values': i, 'Profit': results[0],
+        data = {'Realization': i, 'Storage Incentive': storage_incentive, 'Util Incentive': util_incentive,  'Profit': results[0],
                 'Total CO2 Captured': results[1],
-                'Capture Costs': results[2], 'Transportation Costs': results[3], 'Storage_costs': results[4],
-                'Utilization Rev': results[5], '45Q Revenue': results[6]}
+                'Capture Costs': results[2], 'Transportation Costs': results[3], 'Storage Costs': results[4],
+                'Utilization Rev': results[5], '45Q Revenue': results[6], 'Total Capture Investment': results[7],
+                'Total Storage Investment': results[8], 'Total Pipeline Investment': results[9], 'Stage 1 Capture Investment': results[10],
+                'Stage 1 Storage Investment': results[11], 'Stage 1 Pipeline Investment': results[12], 'Total Stage 1 CO2 Captured': results[13]}
 
         test = pd.DataFrame(data, index=[i])
         df = pd.concat([df, test])
-        update_slack(f'Case {i} complete, {num_cases - 1 - i} left!')
+
     print(df)
     sys.stdout.close()
-    # with pd.ExcelWriter('Cases/Case6/Results/Debugging/Deterministic_.xlsx', mode='a', if_sheet_exists="replace") as writer:
-    #     df.to_excel(writer, sheet_name='Deterministic')
-    storage_incentives = [0]
-    util_incentives = [0]
-    update_slack('I finished running!')
+    with pd.ExcelWriter(f'Cases/Case{case_num}/Results/Deterministic.xlsx', mode='a',
+                        if_sheet_exists="replace") as writer:
+        df.to_excel(writer, sheet_name='Det')
 
-    # run_exp(0, 0, base_storage=85, base_util=60, second_stage_start=2)
+
+    plot_total_investment_Det(8, 'Deterministic.xlsx')
+    plot_first_stage_investment_Det(8, 'Deterministic.xlsx')
+    plot_total_CO2(8, 'Deterministic.xlsx')
